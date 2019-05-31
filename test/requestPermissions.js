@@ -1,5 +1,5 @@
 const test = require('tape')
-const LoginController = require('../')
+const LoginController = require('../').default
 const equal = require('fast-deep-equal')
 
 // TODO: Standardize!
@@ -51,7 +51,6 @@ test('requestPermissions with user approval creates permission', async (t) => {
       }
     }
   }
-
 
   const ctrl = LoginController({
     requestUserApproval: () => Promise.resolve(true),

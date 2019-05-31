@@ -1,5 +1,5 @@
 const test = require('tape')
-const createPermissions = require('../')
+const createPermissions = require('../').default
 
 // TODO: Standardize!
 // Maybe submit to https://github.com/ethereum/wiki/wiki/JSON-RPC-Error-Codes-Improvement-Proposal

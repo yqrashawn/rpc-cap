@@ -1,5 +1,5 @@
 const test = require('tape')
-const createPermissionsMiddleware = require('../')
+const createPermissionsMiddleware = require('../').default
 const equal = require('fast-deep-equal')
 const uuid = require('uuid/v4')
 

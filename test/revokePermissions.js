@@ -1,5 +1,5 @@
 const test = require('tape')
-const createPermissionsMiddleware = require('../')
+const createPermissionsMiddleware = require('../').default
 const equal = require('fast-deep-equal')
 
 // TODO: Standardize!  Maybe submit to https://github.com/ethereum/wiki/wiki/JSON-RPC-Error-Codes-Improvement-Proposal
