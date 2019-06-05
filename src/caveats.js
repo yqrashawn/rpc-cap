@@ -3,6 +3,8 @@ const deepClone = require('rfdc')() // really fast deep clone
 const deepFreeze = require('deep-freeze-strict')
 const freeze = Object.freeze
 
+const errors = require('./errors').caveats
+
 const TYPES = {
   STATIC: 'static',
   FIXED_PARAMS: 'fixed-params',
@@ -46,47 +48,43 @@ function addCaveat (perm, opts) {
 
   const caveats = perm.caveats ? perm.caveats.slice() : []
 
+  if (opts.value === undefined)
+    throw new Error(errors.valueUndefined())
+
   switch (opts.type) {
 
     case TYPES.STATIC:
 
       if (alreadyExists(caveats, 'type', TYPES.STATIC))
-        throw new Error(
-          'Duplicate: Permission already has "' + TYPES.STATIC + '" caveat.'
-        )
+        throw new Error(errors.incompatibleType(TYPES.STATIC, TYPES.STATIC))
 
-      // TODO: should these be incompatible?
-      // if (alreadyExists(caveats, 'type', TYPES.FIXED_PARAMS))
-      //   throw new Error(
-      //     'Incompatible: Permission already has "' + TYPES.FIXED_PARAMS +
-      //     '" caveat.'
-      //   )
-
-      if (opts.value === undefined)
-        throw new Error('Static caveat value is undefined.')
+      if (alreadyExists(caveats, 'type', TYPES.FIXED_PARAMS))
+        throw new Error(errors.incompatibleType(
+          TYPES.STATIC, TYPES.FIXED_PARAMS
+        ))
 
       caveats.push(deepFreeze({
         type: TYPES.STATIC,
         value: deepClone(opts.value),
       }))
       break
+      // once this is pure:
+      // return deepFreze({
+      //   ...perm,
+      //   caveats: newCaveats
+      // })
     
     case TYPES.FIXED_PARAMS:
 
-      // TODO: should these be incompatible?
-      // if (alreadyExists(caveats, 'type', TYPES.STATIC))
-      //   throw new Error(
-      //     'Incompatible: Permission already has "' + TYPES.STATIC + '" caveat.'
-      //   )
+      if (alreadyExists(caveats, 'type', TYPES.STATIC))
+        throw new Error(errors.incompatibleType(
+          TYPES.FIXED_PARAMS, TYPES.STATIC
+        ))
 
       if (alreadyExists(caveats, 'type', TYPES.FIXED_PARAMS))
-        throw new Error(
-          'Duplicate: Permission already has "' + TYPES.FIXED_PARAMS +
-          '" caveat.'
-        )
-
-      if (opts.value === undefined)
-        throw new Error('Fixed param caveat value is undefined.')
+        throw new Error(errors.incompatibleType(
+          TYPES.FIXED_PARAMS, TYPES.FIXED_PARAMS
+        ))
 
       caveats.push(deepFreeze({
         type: TYPES.FIXED_PARAMS,
@@ -97,17 +95,13 @@ function addCaveat (perm, opts) {
     case TYPES.CONDITION:
 
       if (alreadyExists(caveats, 'subType', opts.subType))
-        throw new Error(
-          'Permission already has "' + TYPES.CONDITION +
-          '" caveat of subType "' + opts.subType + '".'
-        )
+        throw new Error(errors.duplicateSubType(type, subType))
 
       if (
-        opts.value === undefined ||
         typeof opts.subType !== 'string' ||
         typeof opts.validator !== 'function' ||
         opts.validator.length !== 2 // accepts 2 params
-      ) throw new Error('Invalid condition caveat options.', opts)
+      ) throw new Error(errors.invalidOptions(opts))
 
       caveats.push(deepFreeze({
         type: TYPES.CONDITION,
@@ -121,7 +115,7 @@ function addCaveat (perm, opts) {
       break
     
     default:
-      throw new Error('Invalid caveat type.', opts.type)
+      throw new Error(errors.invalidType(opts.type))
   }
   // TODO: freeze permissions and make this function pure
   perm.caveats = freeze(caveats)
@@ -150,16 +144,12 @@ function createFixedParams(value) {
   else vals = value
 
   const params = []
-  // traditional for loop to handle empty and undefind array items
+  // traditional for-loop to handle empty as well as undefind array items
   for (let i = 0; i < vals.length; i++) {
     if (vals[i] === undefined) params.push({ fixed: false })
     else params.push({ fixed: true, value: deepClone(vals[i]) })
   }
   return params
-  // return vals.map(v => {
-  //   if (v === undefined) return { fixed: false }
-  //   return { fixed: true, value: deepClone(v) }
-  // })
 }
 
 /**

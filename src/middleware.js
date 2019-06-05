@@ -98,6 +98,7 @@ function createJsonRpcCapabilities ({
     if (Object.keys(that.restrictedMethods).includes(methodName)
         && typeof that.restrictedMethods[methodName].method === 'function') {
 
+      // TODO:caveat enforce all
       // Support static caveat:
       if (permission.caveats) {
         const statics = permission.caveats.filter(c => c.type === 'static');
