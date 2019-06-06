@@ -98,7 +98,7 @@ function createJsonRpcCapabilities ({
     if (Object.keys(that.restrictedMethods).includes(methodName)
         && typeof that.restrictedMethods[methodName].method === 'function') {
 
-      // TODO:caveat enforce all
+      // TODO:caveats enforce all
       // Support static caveat:
       if (permission.caveats) {
         const statics = permission.caveats.filter(c => c.type === 'static');
@@ -136,7 +136,7 @@ function createJsonRpcCapabilities ({
    * @param {string} method - The method
    */
   function getPermission (domain, method) {
-    // TODO: Aggregate & Enforce Caveats at each step.
+    // TODO:caveats Enforce caveats for each permission along granter chain
     // https://w3c-ccg.github.io/ocap-ld/#caveats
 
     const methodFilter = p => p.method === method;
@@ -160,12 +160,13 @@ function createJsonRpcCapabilities ({
   that.getPermission = getPermission;
 
   /**
-   * Get the permission for that domain, granter, and method, not following granter links.
-   * Returns the first such permission found.
+   * Get the permission for that domain, granter, and method, not following
+   * granter links. Returns the first such permission found.
    */
   that.getPermissionUnTraversed = function (domain, method, granter = undefined) {
-    // TODO: Aggregate & Enforce Caveats at each step.
-    // https://w3c-ccg.github.io/ocap-ld/#caveats
+    // TODO:caveats Does this need to aggregate and enforce caveats?
+    // It's only used for revoking permissions, which should be orthogonal to 
+    // caveats.
 
     let permissions = that.getPermissionsForDomain(domain).filter(p => {
       return p.method === method && (

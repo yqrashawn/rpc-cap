@@ -1,19 +1,15 @@
 
 const deepClone = require('rfdc')() // really fast deep clone
 const deepFreeze = require('deep-freeze-strict')
+const equal = require('fast-deep-equal')
 const freeze = Object.freeze
 
 const errors = require('./errors').caveats
 
-const TYPES = {
-  STATIC: 'static',
-  FIXED_PARAMS: 'fixed-params',
-  CONDITION: 'condition',
-}
-
 module.exports = {
-  default: addCaveat,
-  caveatTypes: TYPES,
+  addCaveat,
+  removeCaveat,
+  caveatEqual,
 }
 
 /**
@@ -23,9 +19,8 @@ module.exports = {
  *      value: [{ fixed: true, value: 'Always this!' }, ...]
  *    },
  *    {
- *      type: 'condition' // The condition caveat ensures the request conforms to some condition
- *      subType: 'valid-accounts',
- *      condition: ['0x1ac390...'],
+ *      type: 'requiredAccount' // The condition caveat ensures the request conforms to some condition
+ *      value: ['0x1ac390...'],
  *      validate: request => boolean
  *    }
  *  ]
@@ -48,120 +43,84 @@ function addCaveat (perm, opts) {
 
   const caveats = perm.caveats ? perm.caveats.slice() : []
 
-  if (opts.value === undefined)
-    throw new Error(errors.valueUndefined())
+  if (
+    typeof opts.type !== 'string' ||
+    opts.value === undefined ||
+    typeof opts.validator !== 'function' ||
+    opts.validator.length !== 2 // accepts 2 params
+  ) throw new Error(errors.invalidOptions(opts))
 
-  switch (opts.type) {
+  if (alreadyExists(caveats, opts.type))
+    throw new Error(errors.duplicateType(opts.type))
 
-    case TYPES.STATIC:
+  caveats.push(deepFreeze({
+    type: opts.type,
+    value: deepClone(opts.value),
+    _validator: opts.validator,
+    validate,
+  }))
 
-      if (alreadyExists(caveats, 'type', TYPES.STATIC))
-        throw new Error(errors.incompatibleType(TYPES.STATIC, TYPES.STATIC))
-
-      if (alreadyExists(caveats, 'type', TYPES.FIXED_PARAMS))
-        throw new Error(errors.incompatibleType(
-          TYPES.STATIC, TYPES.FIXED_PARAMS
-        ))
-
-      caveats.push(deepFreeze({
-        type: TYPES.STATIC,
-        value: deepClone(opts.value),
-      }))
-      break
-      // once this is pure:
-      // return deepFreze({
-      //   ...perm,
-      //   caveats: newCaveats
-      // })
-    
-    case TYPES.FIXED_PARAMS:
-
-      if (alreadyExists(caveats, 'type', TYPES.STATIC))
-        throw new Error(errors.incompatibleType(
-          TYPES.FIXED_PARAMS, TYPES.STATIC
-        ))
-
-      if (alreadyExists(caveats, 'type', TYPES.FIXED_PARAMS))
-        throw new Error(errors.incompatibleType(
-          TYPES.FIXED_PARAMS, TYPES.FIXED_PARAMS
-        ))
-
-      caveats.push(deepFreeze({
-        type: TYPES.FIXED_PARAMS,
-        value: createFixedParams(opts.value),
-      }))
-      break
-    
-    case TYPES.CONDITION:
-
-      if (alreadyExists(caveats, 'subType', opts.subType))
-        throw new Error(errors.duplicateSubType(type, subType))
-
-      if (
-        typeof opts.subType !== 'string' ||
-        typeof opts.validator !== 'function' ||
-        opts.validator.length !== 2 // accepts 2 params
-      ) throw new Error(errors.invalidOptions(opts))
-
-      caveats.push(deepFreeze({
-        type: TYPES.CONDITION,
-        subType: opts.subType,
-        value: deepClone(opts.value),
-        _validator: opts.validator,
-        validate: function (req) {
-          return this._validator(req, this.value)
-        },
-      }))
-      break
-    
-    default:
-      throw new Error(errors.invalidType(opts.type))
-  }
+  // once this is pure:
+  // return deepFreze({
+  //   ...perm,
+  //   caveats: newCaveats
+  // })
+      
   // TODO: freeze permissions and make this function pure
   perm.caveats = freeze(caveats)
 }
 
 /**
- * Creates formatted fixed parameters value property from argument.
+ * Removes the caveat of the given type for the given permission.
+ * Returns the removed caveat if it exists; null otherwise.
  * 
- * Ex: 'abc' => { fixed: true, value: 'abc' }
- *     ['abc', , 123] => [
- *       { fixed: true, value: 'abc' },
- *       { fixed: false },
- *       { fixed: true, value: 123 }
- *     ]
- * 
- * @param {any} value single value !== undefined OR array of arbitrary values
+ * @param {Object} perm 
+ * @param {String} type 
  */
-function createFixedParams(value) {
-
-  if (value === undefined) throw new Error(
-    'Single fixed param value must not be undefined; use null instead.'
-  )
-
-  let vals
-  if (!Array.isArray(value)) vals = [value]
-  else vals = value
-
-  const params = []
-  // traditional for-loop to handle empty as well as undefind array items
-  for (let i = 0; i < vals.length; i++) {
-    if (vals[i] === undefined) params.push({ fixed: false })
-    else params.push({ fixed: true, value: deepClone(vals[i]) })
+function removeCaveat(perm, type) {
+  let cav = null
+  if (perm.caveats && perm.caveats.length > 0) {
+    const newCaveats = []
+    for (let c of perm.caveats) {
+      if (c.type === type) cav = c
+      else newCaveats.push(c)
+    }
+    perm.caveats = newCaveats
   }
-  return params
+  return cav
 }
 
 /**
- * Returns whether the given array of caveats already has a caveat with key: val
+ * Checks if two caveats are semantically equivalent.
+ * @param {Object} a 
+ * @param {Object} b 
+ */
+function caveatEqual(a, b) {
+  return (
+    a.type === b.type &&
+    equal(a.value, b.value) &&
+    ''+a._validator === ''+b._validator // functionBody.toString()
+  )
+}
+
+/**
+ * The internal validation function used by all caveats.
+ * @param {Object} request 
+ */
+function validate(request) {
+  return this._validator(request, this.value)
+}
+
+/**
+ * Returns whether the given array of caveats already has a caveat of the
+ * given type.
  * 
  * @param {Array} caveats 
- * @param {String} key 
- * @param {String} val 
+ * @param {String} type 
  */
-function alreadyExists(caveats, key, val) {
+function alreadyExists(caveats, type) {
   for (let c of caveats) {
-    if (c[key] === val) return true
+    if (c.type === type) return true
   }
   return false
 }
