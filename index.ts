@@ -17,10 +17,12 @@ import {
 import { BaseController } from 'gaba';
 
 import {
-  ICaveatFunction,
+  caveatEqual,
   filterParams,
   filterResponse,
+  ICaveatFunction,
   ICaveatFunctionGenerator,
+  sortCaveats,
 } from './src/caveats';
 
 import { 
@@ -78,7 +80,7 @@ class Capability implements IOcapLdCapability {
     }
   }
 
-  toString():string {
+  toString(): string {
     return JSON.stringify(this.toJSON());
   }
 }
@@ -107,7 +109,7 @@ export class CapabilitiesController extends BaseController<any, any> implements 
       permissionsRequests: [],
       permissionsDescriptions: Object.keys(
         this.restrictedMethods
-      ).reduce<{[key:string]:string}>(
+      ).reduce<{ [key: string]: string }>(
         (acc, methodName) => {
           acc[methodName] = this.restrictedMethods[methodName].description
           return acc;
@@ -139,7 +141,7 @@ export class CapabilitiesController extends BaseController<any, any> implements 
     res: JsonRpcResponse<any>,
     next: JsonRpcEngineNextCallback,
     end: JsonRpcEngineEndCallback,
-  ) : void {
+  ): void {
     const methodName = req.method;
 
     // skip registered safe/passthrough methods.
@@ -217,7 +219,7 @@ export class CapabilitiesController extends BaseController<any, any> implements 
     res: JsonRpcResponse<any>,
     next: JsonRpcEngineNextCallback,
     end: JsonRpcEngineEndCallback,
-  ) : void {
+  ): void {
     const methodKey = this.getMethodKeyFor(req.method);
     const permission = this.getPermission(domain.origin, req.method);
     if (methodKey && typeof this.restrictedMethods[methodKey].method === 'function') {
@@ -247,9 +249,13 @@ export class CapabilitiesController extends BaseController<any, any> implements 
     return end(METHOD_NOT_FOUND);
   }
 
+  /**
+   * Get all permissions for the given domain. 
+   * @param {string} domain - The domain whose permissions to retrieve
+   */
   getPermissionsForDomain (domain: string): IOcapLdCapability[] {
     const { domains = {} } = this.state;
-    if (Object.keys(domains).includes(domain)) {
+    if (domains[domain]) {
       const { permissions } = domains[domain];
       return permissions;
     }
@@ -273,6 +279,67 @@ export class CapabilitiesController extends BaseController<any, any> implements 
   }
 
   /**
+   * Check whether the requested permissions are a subset of the existing
+   * permissions for the given domain. Returns false iff:
+   * - the domain does not have 1 or more of the requested permissions, by
+   *   method name
+   * - 1 or more of the matching permission pairs do not have identical caveats
+   *   by caveat type and value
+   * Returns true otherwise.
+   * 
+   * NOTE: Assumes that the caveats of all existing and requested permissions
+   * have been sorted by the sortCaveats method.
+   * 
+   * @param {string} domain - The domain whose permission to check against.
+   * @param {IRequestedPermissions} requests - The permissions request object.
+   */
+  hasPermissions (domain: string, requests: IRequestedPermissions): boolean {
+
+    const existing = this.getPermissionsForDomain(domain)
+    .reduce<{ [key: string]: IOcapLdCapability }>(
+      (acc, perm) => {
+        acc[perm.parentCapability] = perm;
+        return acc;
+      }, {}
+    );
+
+    const requestKeys = Object.keys(requests)
+    for (let i = 0; i < requestKeys.length; i++) {
+      if (!existing[requestKeys[i]]) return false;
+    }
+
+    // check if the requested caveats are equal to the existing caveats
+    let requestedCaveats: IOcapLdCaveat[] | undefined;
+    let existingCaveats: IOcapLdCaveat[] | undefined;
+    let isEqual: boolean;
+    for (let i = 0; i < requestKeys.length; i++) {
+
+      requestedCaveats = requests[requestKeys[i]].caveats;
+      existingCaveats = existing[requestKeys[i]].caveats;
+      if (!requestedCaveats && !existingCaveats) continue;
+      if (
+        (!requestedCaveats || !existingCaveats) ||
+        requestedCaveats.length !== existingCaveats.length
+      ) return false;
+
+      // for all requested caveats, ensure that there is one corresponding,
+      // equal existing caveat
+      for (let j = 0; j < requestedCaveats.length; j++) {
+        isEqual = false;
+        for (let k = 0; k < existingCaveats.length; k++) {
+          if (caveatEqual(requestedCaveats[j], existingCaveats[k])) {
+            isEqual = true;
+            break;
+          }
+        }
+        if (!isEqual) return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
    * Gets current permissions request objects.
    * Useful for displaying information for user consent.
    */
@@ -284,9 +351,9 @@ export class CapabilitiesController extends BaseController<any, any> implements 
   /**
    * Used for removing a permissions request from the permissions request array.
    * 
-   * @param request The request that no longer requires user attention.
+   * @param {string} requestId - The request that no longer requires user attention.
    */
-  removePermissionsRequest (requestId: string) : void {
+  removePermissionsRequest (requestId: string): void {
     const reqs = this.getPermissionsRequests().filter((oldReq) => {
       return oldReq.metadata.id !== requestId;
     })
@@ -330,12 +397,12 @@ export class CapabilitiesController extends BaseController<any, any> implements 
     end();
   }
 
-  getDomains () : RpcCapDomainRegistry {
+  getDomains (): RpcCapDomainRegistry {
     const { domains } = this.state;
     return domains || {};
   }
 
-  setDomains (domains: RpcCapDomainRegistry) : void {
+  setDomains (domains: RpcCapDomainRegistry): void {
     this.update({ domains });
   }
 
@@ -373,8 +440,8 @@ export class CapabilitiesController extends BaseController<any, any> implements 
 
   /**
    * Adds permissions to the given domain. Overwrites existing identical
-   * permissions (same domain, and method). Other existing permissions
-   * remain unaffected.
+   * permissions (same domain and method), irrespective of caveats. Other
+   * existing permissions are unaffected.
    * 
    * @param {string} domainName - The grantee domain.
    * @param {Array} newPermissions - The unique, new permissions for the grantee domain.
@@ -383,7 +450,7 @@ export class CapabilitiesController extends BaseController<any, any> implements 
     const domain: RpcCapDomainEntry = this.getOrCreateDomainSettings(domainName);
     const newKeys = Object.keys(newPermissions);
 
-    // remove old permissions this will be overwritten
+    // remove old permissions; they will be overwritten
     domain.permissions = domain.permissions.filter((oldPerm: IOcapLdCapability) => {
       return !newKeys.includes(oldPerm.parentCapability);
     });
@@ -438,6 +505,49 @@ export class CapabilitiesController extends BaseController<any, any> implements 
     this.setDomains({})
   }
 
+  finalizePermissionsRequest (
+    req: JsonRpcRequest<any>,
+    res: JsonRpcResponse<any>,
+  ): boolean {
+
+    // validate request
+    if (
+      !req || !req.params ||
+      typeof req.params[0] !== 'object' ||
+      Array.isArray(req.params[0]) ||
+      Object.keys(req.params[0]).length === 0
+    ) {
+      res.error = invalidReq(req);
+      return false;
+    }
+
+    for (let methodName of Object.keys(req.params[0])) {
+      sortCaveats(req.params[0][methodName].caveats);
+    }
+
+    return true;
+  }
+
+  getFinalizedRequestMetadata (
+    metadata: IOriginMetadata,
+    req: JsonRpcRequest<any>,
+  ): IOriginMetadata {
+
+    // get additional metadata from params if it exists
+    if (
+      req.params.length === 2 &&
+      req.params[1].metadata
+    ) {
+      metadata = { ...req.params.pop().metadata, ...metadata }
+    }
+
+    if (!metadata.id) {
+      metadata.id = uuid();
+    }
+
+    return metadata;
+  }
+
   getPermissionsMiddleware (
     domain: IOriginMetadata,
     _req: JsonRpcRequest<any>,
@@ -459,40 +569,26 @@ export class CapabilitiesController extends BaseController<any, any> implements 
     res: JsonRpcResponse<any>,
     _next: JsonRpcEngineNextCallback,
     end: JsonRpcEngineEndCallback,
-  ) : void {
+  ): void {
 
-    // validate request
-    if (
-      req === undefined ||
-      !req.params ||
-      typeof req.params[0] !== 'object' ||
-      Array.isArray(req.params[0])
-    ) {
-      res.error = invalidReq(req);
+    if (!this.finalizePermissionsRequest(req, res)) {
       return end(res.error);
     }
 
-    // get additional metadata from params if it exists
-    if (
-      req.params.length === 2 &&
-      req.params[1].metadata
-    ) {
-      metadata = { ...req.params.pop().metadata, ...metadata }
-    }
-
-    if (!metadata.id) {
-      metadata.id = uuid();
-    }
+    metadata = this.getFinalizedRequestMetadata(metadata, req);
 
     const permissions: IRequestedPermissions = req.params[0];
-    const requests = this.getPermissionsRequests();
+    if (this.hasPermissions(metadata.origin, permissions)) {
+      res.result = this.getPermissionsForDomain(metadata.origin);
+      return end();
+    }
 
+    const requests = this.getPermissionsRequests();
     const permissionsRequest: IPermissionsRequest = {
       origin: metadata.origin,
       metadata,
       permissions: permissions,
     };
-
     requests.push(permissionsRequest);
     this.setPermissionsRequests(requests);
 

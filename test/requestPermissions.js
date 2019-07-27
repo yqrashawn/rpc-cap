@@ -1,6 +1,7 @@
 const test = require('tape')
 const CapabilitiesController = require('../dist').CapabilitiesController;
 const equal = require('fast-deep-equal')
+const { CAVEAT_TYPES } = require('../src/caveats')
 
 // TODO: Standardize!
 // Maybe submit to https://github.com/ethereum/wiki/wiki/JSON-RPC-Error-Codes-Improvement-Proposal
@@ -122,8 +123,64 @@ test('approving unknown permission should fail', async (t) => {
     t.equal(error.code, -32601, 'should throw method not found error')
     t.end();
   }
+})
 
+// this tests how requestPermissionsMiddleware uses hasPermissions
+test('requesting already-possessed permissions should passthrough', async (t) => {
 
+  const origin1 = 'login.metamask.io'
+  const domain = { origin: origin1 }
+  const caveat1 = {
+    type: CAVEAT_TYPES.FILTER_RESPONSE,
+    value: [1, 2, 3]
+  }
+  const perm1 = {
+    parentCapability: 'restricted',
+    caveats: [ { ...caveat1 } ],
+  }
+
+  const ctrl = new CapabilitiesController({
+    requestUserApproval: () => t.fail(
+      'requestUserApproval should not be called'
+    ),
+    restrictedMethods: {
+      restricted: (req, res, next, end) => {
+        res.result = 'Wahoo!';
+        end();
+      }
+    }
+  },
+  {
+    domains: {
+      [origin1]: {
+        permissions: [
+          perm1,
+        ]
+      }
+    }
+  }
+)
+
+  let req = {
+    method: 'requestPermissions',
+    params: [
+      {
+        restricted: {
+          caveats: [ { ...caveat1 } ],
+        }
+      }
+    ]
+  }
+
+  try {
+    let res = await sendRpcMethodWithResponse(ctrl, domain, req);
+    t.ok(res, 'should resolve');
+    t.ok(equal(res.result, [ { ...perm1 } ]))
+    t.end();
+  } catch (error) {
+    t.notOk(error, 'should not error')
+    t.end();
+  }
 })
 
 async function sendRpcMethodWithResponse(ctrl, domain, req) {
@@ -147,4 +204,3 @@ async function sendRpcMethodWithResponse(ctrl, domain, req) {
     }
   })
 }
-

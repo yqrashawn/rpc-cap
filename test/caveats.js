@@ -10,7 +10,7 @@ test('filterParams caveat throws if params are not a subset.', async (t) => {
   const ctrl = new CapabilitiesController({
     restrictedMethods: {
       'write': {
-        method: (req, res, next, end) => {
+        method: (req, res, _, end) => {
           const params = req.params;
           res.result = params;
           end();
